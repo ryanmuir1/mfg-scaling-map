@@ -5,10 +5,12 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
+from matplotlib.cm import ScalarMappable
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-st.set_page_config(page_title="Scaling Surface Map (Scalable UI)", layout="wide")
-st.title("Scaling Surface Map — Scalable UI")
+st.set_page_config(page_title="Scaling Map — 3D Ridges", layout="wide")
+st.title("Scaling Map — 3D Ridges (Green = good, Red = bad)")
 
 DEFAULT_DATA_PATH = os.getenv("SCALING_DATA_PATH", "data/Scaling_Surface_Template.xlsx")
 DEFAULT_DATA_URL  = os.getenv("SCALING_DATA_URL", "")  # optional raw URL
@@ -90,19 +92,19 @@ def compute_scaling(df: pd.DataFrame, metric_type: str) -> pd.DataFrame:
     rng = (p95 - p5) if (p95 - p5) > 1e-9 else 1.0
     res["Scaling_Score_0to1"] = np.clip((sl - p5) / rng, 0, 1)
 
-    # Priority score (no custom colors, per constraints)
+    # Priority score
     reg_weight = res["Regulatory_Constraint"].map({"Low":1.0,"Medium":1.3,"High":1.7}).fillna(1.2)
     readiness = pd.to_numeric(res["Automation_Readiness"], errors="coerce").fillna(3.0)
     res["Priority_Score"] = res["Scaling_Score_0to1"] * readiness / reg_weight
     return res
 
-def surface_subset(df_raw: pd.DataFrame, processes: list, metric_type: str):
+def ridge_data(df_raw: pd.DataFrame, processes: list, metric_type: str):
     dfm = df_raw[df_raw["Metric_Type"] == metric_type].dropna(subset=["Process_ID","Lot_Size_Units","Metric_Value"]).copy()
     dfm = dfm[dfm["Process_ID"].isin(processes)]
     lot_sizes = np.sort(dfm["Lot_Size_Units"].unique())
     Z = np.full((len(lot_sizes), len(processes)), np.nan)
-    for i, ls in enumerate(lot_sizes):
-        for j, pid in enumerate(processes):
+    for j, pid in enumerate(processes):
+        for i, ls in enumerate(lot_sizes):
             vals = dfm[(dfm["Process_ID"] == pid) & (dfm["Lot_Size_Units"] == ls)]["Metric_Value"].values
             if len(vals) > 0:
                 Z[i, j] = float(np.mean(vals))
@@ -160,7 +162,7 @@ if res.empty:
 sort_key = st.selectbox("Sort by", ["Scaling_Score_0to1", "Priority_Score"])
 top_n = st.slider("Show Top-N processes", min_value=5, max_value=min(50, len(res)), value=min(20, len(res)))
 
-# ---------------------- Scalable chart: Top-N horizontal bars ----------------------
+# ---------------------- Top-N bars ----------------------
 st.subheader("Top-N Processes (sorted)")
 top = res.sort_values(sort_key, ascending=False).head(top_n)
 
@@ -172,27 +174,49 @@ ax.set_ylabel("Process")
 ax.set_title("Scaling / Priority — Top-N")
 st.pyplot(fig)
 
-# ---------------------- 3D Surface: subset only ----------------------
-st.subheader("3D Surface — subset only")
+# ---------------------- 3D Ridges ----------------------
+st.subheader("3D Ridges — per-process profiles (Green=good, Red=bad)")
+
+# Choose subset for ridges
 default_subset = top["Process_ID"].tolist()
-subset = st.multiselect("Select processes (max 12 recommended)", res["Process_ID"].tolist(), default=default_subset[:12])
+subset = st.multiselect("Select processes (max 20 recommended)", res["Process_ID"].tolist(), default=default_subset[:12])
+
 if subset:
-    lot_sizes, Z = surface_subset(df_f, subset, metric)
+    lot_sizes, Z = ridge_data(df_f, subset, metric)
     if len(lot_sizes) > 0:
-        import numpy as np
-        X, Y = np.meshgrid(np.arange(len(subset)), np.arange(len(lot_sizes)))
-        fig3d = plt.figure(figsize=(10, 6))
+        # Map each process to its scaling score for colour
+        score_map = dict(zip(res["Process_ID"], res["Scaling_Score_0to1"]))
+        norm = Normalize(vmin=0.0, vmax=1.0)
+        cmap = plt.get_cmap("RdYlGn_r")  # 0 -> green, 1 -> red
+
+        fig3d = plt.figure(figsize=(11, 7))
         ax3d = fig3d.add_subplot(111, projection="3d")
-        ax3d.plot_surface(X, Y, np.nan_to_num(Z, nan=np.nanmean(Z)), edgecolor="k")
-        ax3d.set_xticks(np.arange(len(subset))); ax3d.set_xticklabels(subset, rotation=45, ha="right")
-        ax3d.set_yticks(np.arange(len(lot_sizes))); ax3d.set_yticklabels(lot_sizes)
-        ax3d.set_xlabel("Process_ID"); ax3d.set_ylabel("Lot Size"); ax3d.set_zlabel(metric)
-        ax3d.set_title("Scaling Surface (subset)")
+
+        for j, pid in enumerate(subset):
+            y_vals = Z[:, j]
+            if np.all(np.isnan(y_vals)):
+                continue
+            color = cmap(norm(score_map.get(pid, 0.0)))
+            ax3d.plot(lot_sizes, y_vals, zs=j, zdir='x', linewidth=2.0, color=color)
+
+        ax3d.set_xticks(np.arange(len(subset)))
+        ax3d.set_xticklabels(subset, rotation=45, ha="right")
+        ax3d.set_xlabel("Process_ID")
+        ax3d.set_ylabel("Lot Size")
+        ax3d.set_zlabel(metric)
+        ax3d.set_title("3D Ridges — Metric vs Lot Size by Process")
+
+        # Add a colour bar for scaling score
+        sm = ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = fig3d.colorbar(sm, shrink=0.6, pad=0.1)
+        cbar.set_label("Scaling Score (0 = good, 1 = bad)")
+
         st.pyplot(fig3d)
     else:
-        st.info("Add more observations across multiple lot sizes to plot the surface.")
+        st.info("Add more observations across multiple lot sizes to plot ridges.")
 else:
-    st.info("Select at least one process for the surface.")
+    st.info("Select at least one process for the ridges.")
 
 # ---------------------- Single process profile ----------------------
 st.subheader("Process Profile — Lot Size vs Metric")
