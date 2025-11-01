@@ -177,25 +177,25 @@ st.pyplot(fig)
 # ---------------------- 3D Ridges ----------------------
 st.subheader("3D Ridges — per-process profiles (Green=good, Red=bad)")
 
-# Choose subset for ridges
 default_subset = top["Process_ID"].tolist()
 subset = st.multiselect("Select processes (max 20 recommended)", res["Process_ID"].tolist(), default=default_subset[:12])
 
 if subset:
     lot_sizes, Z = ridge_data(df_f, subset, metric)
     if len(lot_sizes) > 0:
-        # Map each process to its scaling score for colour
         score_map = dict(zip(res["Process_ID"], res["Scaling_Score_0to1"]))
         norm = Normalize(vmin=0.0, vmax=1.0)
-        cmap = plt.get_cmap("RdYlGn_r")  # 0 -> green, 1 -> red
+        cmap = plt.get_cmap("RdYlGn_r")
 
         fig3d = plt.figure(figsize=(11, 7))
         ax3d = fig3d.add_subplot(111, projection="3d")
 
+        plotted_any = False
         for j, pid in enumerate(subset):
             y_vals = Z[:, j]
             if np.all(np.isnan(y_vals)):
                 continue
+            plotted_any = True
             color = cmap(norm(score_map.get(pid, 0.0)))
             ax3d.plot(lot_sizes, y_vals, zs=j, zdir='x', linewidth=2.0, color=color)
 
@@ -206,11 +206,10 @@ if subset:
         ax3d.set_zlabel(metric)
         ax3d.set_title("3D Ridges — Metric vs Lot Size by Process")
 
-        # Add a colour bar for scaling score
-        sm = ScalarMappable(norm=norm, cmap=cmap)
-        sm.set_array([])
-        cbar = fig3d.colorbar(sm, shrink=0.6, pad=0.1)
-        cbar.set_label("Scaling Score (0 = good, 1 = bad)")
+        if plotted_any:
+            sm = ScalarMappable(norm=norm, cmap=cmap)
+            sm.set_array([])
+            fig3d.colorbar(sm, ax=ax3d, shrink=0.6, pad=0.1).set_label("Scaling Score (0 = good, 1 = bad)")
 
         st.pyplot(fig3d)
     else:
